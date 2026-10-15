@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: jaskita-api
+    runtime: go
+    plan: free
+    region: singapore
+    buildCommand: go build -o bin/api ./cmd/api
+    startCommand: ./bin/api
+    healthCheckPath: /health
+    envVars:
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        value: "4000"
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_NAME
+        sync: false
+      - key: DB_TLS
+        value: "true"
+      - key: JWT_SECRET
+        sync: false
