@@ -25,14 +25,15 @@ func Connect() *gorm.DB {
 	}
 
 	driverConfig := mysqldriver.Config{
-		User:      os.Getenv("DB_USER"),
-		Passwd:    os.Getenv("DB_PASSWORD"),
-		Net:       "tcp",
-		Addr:      net.JoinHostPort(host, port),
-		DBName:    os.Getenv("DB_NAME"),
-		ParseTime: true,
-		Loc:       time.Local,
-		Params:    map[string]string{"charset": "utf8mb4"},
+		User:                 os.Getenv("DB_USER"),
+		Passwd:               os.Getenv("DB_PASSWORD"),
+		Net:                  "tcp",
+		Addr:                 net.JoinHostPort(host, port),
+		DBName:               os.Getenv("DB_NAME"),
+		ParseTime:            true,
+		Loc:                  time.Local,
+		Params:               map[string]string{"charset": "utf8mb4"},
+		AllowNativePasswords: true,
 	}
 	if strings.EqualFold(os.Getenv("DB_TLS"), "true") {
 		if err := mysqldriver.RegisterTLSConfig("tidb", &tls.Config{
