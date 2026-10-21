@@ -15,7 +15,7 @@
 - Pengeluaran: CRUD, kategori "Modal" vs operasional, dikeluarkan oleh
 - Notifikasi jatuh tempo
 - Soft delete + jejak siapa yang menghapus (`deleted_by`) di semua fitur CRUD
-- Ulasan pelanggan: link ulasan untuk transaksi selesai, galeri publik, unggah maksimal 5 foto per ulasan ke Cloudflare R2, pengaktifan kembali link, dan pengelolaan ulasan admin
+- Ulasan pelanggan: link ulasan untuk transaksi selesai, galeri publik berpaginasi, unggah maksimal 5 foto per ulasan ke Cloudflare R2, pengaktifan kembali link, dan pengelolaan ulasan admin
 
 Untuk link ulasan, set `FRONTEND_URL` ke alamat frontend (misalnya `http://localhost:3000`). Sebelum upload foto, buat bucket R2, aktifkan akses publik melalui custom domain atau URL publik `r2.dev`, lalu buat token S3 dengan izin **Object Read & Write** yang dibatasi ke bucket tersebut. `R2_PUBLIC_URL` adalah URL publik dasar yang membuka objek, bukan endpoint S3. Atur variabel berikut di environment backend; jangan commit access key/secret:
 
@@ -29,15 +29,20 @@ R2_PUBLIC_URL=https://images.example.com
 
 `R2_PUBLIC_URL` harus berupa base URL publik untuk objek (tanpa garis miring di akhir). Foto lama yang tersimpan di `uploads/ulasan` tetap dilayani dari backend dan dapat dihapus oleh admin; foto baru diunggah ke R2. Upload akan memberi pesan konfigurasi yang jelas jika environment R2 belum lengkap.
 
+Endpoint galeri publik `GET /api/public/ulasan` menerima parameter `page` (mulai dari 1), `limit` (1–24, default 9), dan `rating` (1–5). Respons berisi maksimal satu halaman, metadata `pagination`, serta ringkasan rata-rata dan jumlah ulasan.
+
+Untuk cache Redis pada galeri publik, atur `REDIS_URL` menggunakan connection URL Redis dari penyedia yang digunakan (mendukung `redis://` dan `rediss://`). Jika variabel ini diatur tetapi Redis tidak dapat dihubungi saat aplikasi mulai, API gagal mulai agar salah konfigurasi tidak tersembunyi. Jika tidak diatur, API tetap berjalan tanpa cache Redis. Cache halaman publik berlaku 60 detik dan otomatis dibatalkan setelah ulasan berhasil dibuat/dikirim, diperbarui, atau dihapus. Permintaan galeri tetap menuju API, tetapi saat cache aktif dan tersedia tidak perlu membaca database untuk daftar yang tersimpan di cache.
+
 ## Deployment gratis (untuk uji coba)
 
 Konfigurasi `render.yaml` menyiapkan API di Render Free. Backend tetap memakai driver MySQL; database TiDB Cloud Starter yang dipilih untuk panduan ini kompatibel dengan protokol MySQL, bukan PostgreSQL atau server MySQL yang dikelola sendiri.
 
 1. Buat instance **MySQL-compatible TiDB Cloud Starter**. Simpan host, username, password, dan nama database dari halaman koneksi. Pastikan endpoint publik mengizinkan koneksi dari API Render; koneksi dari aplikasi menggunakan TLS.
 2. Hubungkan repo backend ini ke Render sebagai Blueprint. Isi `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, dan `JWT_SECRET` saat diminta. `DB_PORT=4000` dan `DB_TLS=true` sudah disiapkan. Buat `JWT_SECRET` acak yang kuat; jangan masukkan rahasia ke Git.
-3. Setelah API berhasil deploy, buka `https://<nama-service>.onrender.com/health`; hasil sehat adalah `{"status":"ok"}`.
-4. Deploy repo frontend di Netlify, lalu atur environment variable `NEXT_PUBLIC_API_URL` ke `https://<nama-service>.onrender.com/api`. Setelah URL frontend diketahui, isi `FRONTEND_URL` pada environment Render dengan URL tersebut lalu deploy ulang.
-5. Agar unggah foto ulasan berfungsi dan tetap tersimpan, isi `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, dan `R2_PUBLIC_URL` di environment Render. Jangan commit access key atau secret.
+3. Untuk mengaktifkan cache galeri, buat instance Redis di penyedia pilihan Anda dan isi `REDIS_URL` di environment Render dengan connection URL yang diberikan (gunakan URL TLS `rediss://` jika diwajibkan penyedia). Simpan URL ini sebagai rahasia; jangan commit ke Git.
+4. Setelah API berhasil deploy, buka `https://<nama-service>.onrender.com/health`; hasil sehat adalah `{"status":"ok"}`.
+5. Deploy repo frontend di Netlify, lalu atur environment variable `NEXT_PUBLIC_API_URL` ke `https://<nama-service>.onrender.com/api`. Setelah URL frontend diketahui, isi `FRONTEND_URL` pada environment Render dengan URL tersebut lalu deploy ulang.
+6. Agar unggah foto ulasan berfungsi dan tetap tersimpan, isi `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, dan `R2_PUBLIC_URL` di environment Render. Jangan commit access key atau secret.
 
 Layanan gratis memiliki batas penggunaan dan tidak ditujukan untuk produksi dengan kebutuhan ketersediaan tinggi. Render Free menidurkan API setelah tidak aktif, sehingga permintaan pertama setelah jeda dapat lambat. File lokal di `uploads/ulasan` bersifat sementara di Render; gunakan R2 untuk foto yang perlu bertahan. TiDB Cloud Starter menyediakan kuota bulanan gratis; jika batas kuota tercapai, koneksi/operasi dapat dibatasi. Periksa batas dan kebijakan harga terbaru sebelum mengandalkannya untuk operasional usaha.
 # jaskitabe

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -18,10 +19,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type Handler struct{ repo *Repository }
+type Handler struct {
+	repo        *Repository
+	publicCache PublicReviewsCache
+}
 
-func RegisterRoutes(public, protected gin.IRouter, repo *Repository) {
-	h := &Handler{repo: repo}
+func RegisterRoutes(public, protected gin.IRouter, repo *Repository, publicCache PublicReviewsCache) {
+	h := &Handler{repo: repo, publicCache: publicCache}
 	admin := protected.Group("/ulasan")
 	admin.Use(requireAdmin)
 	admin.POST("/transaksi/:id/link", h.createLink)
@@ -187,6 +191,7 @@ func (h *Handler) submit(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	h.invalidatePublicReviews(c.Request.Context())
 	if err := removeReviewPhotos(c.Request.Context(), oldPhotoURLs); err != nil {
 		log.Printf("old review photo deletion failed after review submit: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "ulasan tersimpan, tetapi foto lama gagal dihapus"})
@@ -232,6 +237,7 @@ func (h *Handler) update(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal memperbarui ulasan"})
 		return
 	}
+	h.invalidatePublicReviews(c.Request.Context())
 	c.JSON(http.StatusOK, gin.H{"data": review})
 }
 
@@ -250,6 +256,7 @@ func (h *Handler) delete(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menghapus ulasan"})
 		return
 	}
+	h.invalidatePublicReviews(c.Request.Context())
 	if err := removeReviewPhotos(c.Request.Context(), photoURLs); err != nil {
 		log.Printf("review photo deletion failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "ulasan dihapus, tetapi foto gagal dihapus"})
@@ -297,10 +304,101 @@ func cleanupUploadedReviewPhotos(ctx context.Context, urls []string) {
 }
 
 func (h *Handler) publicList(c *gin.Context) {
-	data, err := h.repo.List()
+	page, err := parsePublicListParam(c, "page", 1, 1, 1_000_000)
 	if err != nil {
-		c.JSON(500, gin.H{"error": "gagal mengambil ulasan"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "parameter page tidak valid"})
 		return
 	}
-	c.JSON(200, gin.H{"data": data})
+	limit, err := parsePublicListParam(c, "limit", 9, 1, 24)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "parameter limit tidak valid (1–24)"})
+		return
+	}
+	rating, err := parsePublicListParam(c, "rating", 0, 0, 5)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "parameter rating tidak valid (0–5)"})
+		return
+	}
+
+	cacheVersion := "0"
+	cacheAvailable := h.publicCache != nil
+	if h.publicCache != nil {
+		version, err := h.publicCache.Get(c.Request.Context(), publicReviewsVersionKey)
+		switch {
+		case err == nil:
+			cacheVersion = version
+		case errors.Is(err, ErrPublicCacheMiss):
+		default:
+			cacheAvailable = false
+			log.Printf("review list cache version lookup failed: %v", err)
+		}
+
+		if cacheAvailable {
+			cacheKey := publicReviewsCacheKey(cacheVersion, page, limit, rating)
+			cached, cacheErr := h.publicCache.Get(c.Request.Context(), cacheKey)
+			switch {
+			case cacheErr == nil:
+				c.Data(http.StatusOK, "application/json; charset=utf-8", []byte(cached))
+				return
+			case !errors.Is(cacheErr, ErrPublicCacheMiss):
+				log.Printf("review list cache lookup failed: %v", cacheErr)
+			}
+		}
+	}
+
+	data, total, totalReviews, averageRating, err := h.repo.ListPublic(page, limit, rating)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal mengambil ulasan"})
+		return
+	}
+	response := gin.H{
+		"data": data,
+		"pagination": gin.H{
+			"page":     page,
+			"limit":    limit,
+			"total":    total,
+			"has_more": int64(page*limit) < total,
+		},
+		"summary": gin.H{
+			"total_reviews":  totalReviews,
+			"average_rating": averageRating,
+		},
+	}
+	responseJSON, err := json.Marshal(response)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "gagal menyiapkan data ulasan"})
+		return
+	}
+	if cacheAvailable {
+		if err := h.publicCache.Set(
+			c.Request.Context(),
+			publicReviewsCacheKey(cacheVersion, page, limit, rating),
+			string(responseJSON),
+			publicReviewsCacheTTL,
+		); err != nil {
+			log.Printf("review list cache write failed: %v", err)
+		}
+	}
+	c.Data(http.StatusOK, "application/json; charset=utf-8", responseJSON)
+}
+
+func (h *Handler) invalidatePublicReviews(ctx context.Context) {
+	if h.publicCache == nil {
+		return
+	}
+	if _, err := h.publicCache.Increment(ctx, publicReviewsVersionKey); err != nil {
+		log.Printf("review list cache invalidation failed: %v", err)
+	}
+}
+
+func parsePublicListParam(c *gin.Context, name string, fallback, min, max int) (int, error) {
+	raw := strings.TrimSpace(c.Query(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < min || value > max {
+		return 0, errors.New("parameter di luar batas")
+	}
+	return value, nil
 }

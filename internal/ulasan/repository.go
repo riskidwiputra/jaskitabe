@@ -302,3 +302,37 @@ func (r *Repository) List() ([]Review, error) {
 	err := r.db.Preload("Foto").Order("created_at desc").Find(&data).Error
 	return data, err
 }
+
+func (r *Repository) ListPublic(page, pageSize, rating int) ([]Review, int64, int64, float64, error) {
+	var summary struct {
+		Total   int64
+		Average float64
+	}
+	if err := r.db.Model(&Review{}).
+		Select("COUNT(*) AS total, COALESCE(AVG(rating), 0) AS average").
+		Scan(&summary).Error; err != nil {
+		return nil, 0, 0, 0, err
+	}
+
+	query := r.db.Model(&Review{})
+	if rating > 0 {
+		query = query.Where("rating = ?", rating)
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, 0, 0, err
+	}
+
+	data := make([]Review, 0, pageSize)
+	offset := (page - 1) * pageSize
+	if err := query.Preload("Foto").
+		Order("created_at desc").
+		Limit(pageSize).
+		Offset(offset).
+		Find(&data).Error; err != nil {
+		return nil, 0, 0, 0, err
+	}
+
+	return data, total, summary.Total, summary.Average, nil
+}

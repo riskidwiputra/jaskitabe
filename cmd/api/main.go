@@ -34,6 +34,19 @@ func main() {
 		&ulasan.ReviewPhoto{},
 	)
 
+	redisCache, err := ulasan.NewRedisPublicReviewsCacheFromEnv()
+	if err != nil {
+		log.Fatalf("Gagal menyiapkan cache ulasan Redis: %v", err)
+	}
+	var publicReviewsCache ulasan.PublicReviewsCache
+	if redisCache != nil {
+		publicReviewsCache = redisCache
+		defer redisCache.Close()
+		log.Println("Cache Redis untuk galeri ulasan aktif")
+	} else {
+		log.Println("REDIS_URL tidak diatur; cache Redis galeri ulasan dinonaktifkan")
+	}
+
 	router := gin.Default()
 	router.Use(config.CORS())
 
@@ -50,7 +63,7 @@ func main() {
 	barangRepo := barang.NewRepository(db)
 	transaksiRepo := transaksi.NewRepository(db)
 
-	ulasan.RegisterRoutes(public, protected, ulasan.NewRepository(db))
+	ulasan.RegisterRoutes(public, protected, ulasan.NewRepository(db), publicReviewsCache)
 	barang.RegisterRoutes(protected, barangRepo)
 	penyewa.RegisterRoutes(protected, penyewa.NewRepository(db))
 	transaksi.RegisterRoutes(protected, transaksiRepo)
